@@ -8,9 +8,9 @@ from tqdm import tqdm
 
 # ================= 配置 =================
 year = 2023
-day = "oneday"
-noise_thresholds = [55, 60, 70]
-export_affected_raster = False   # ❗是否输出中间的 tif（默认 False）
+day = "night"
+noise_thresholds = [40,45,50,55,60,65,70] # dB 阈值列表
+export_affected_raster = False   # 是否输出中间的 tif（默认 False）
 # population_root = rf"G:\US\{year}\clip\usa"
 population_root = rf"F:\wordpop_USA\both\{year}\clip\usa"
 noise_root = rf"./noise/USA_tiles/{year}/{day}/noise_aligned"
