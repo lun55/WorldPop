@@ -1,61 +1,81 @@
 import os
+import re
 import rasterio
 from rasterio.warp import reproject, Resampling
+import numpy as np 
 
-'''
-自动裁剪 & 重采样噪音数据，使其格网与人口数据对齐
-输入：
-    - population_folder: 已处理的人口数据文件夹（EPSG:3857, 100m）
-    - noise_path: 原始噪音大影像（整幅）
-输出：
-    - 按人口区域裁剪 & 对齐后的噪音数据（分辨率100m）
-'''
+# ---------- 配置 ----------
+POP_ROOT   = r"F:\WordPop\全球人口1KM"
+NOISE_ROOT = r"F:\机场噪音\全球\补"
+OUT_ROOT   = r"F:\机场噪音\重采样"          # 输出根目录
+os.makedirs(OUT_ROOT, exist_ok=True)
 
-# === 配置 ===
-year = 2023
-day = "oneday"
-population_folder = rf"F:\wordpop_USA\both\2023\clip\usa\f\00"  # 人口数据
-noise_path = rf"F:\机场噪音\SEL_{day}_{year}10_95.tiff"             # 原始大影像
-output_folder = rf"./noise/USA_tiles/{year}/{day}/noise_aligned"
-os.makedirs(output_folder, exist_ok=True)
+# 支持扩展名
+TIF_EXTS = (".tif", ".tiff")
 
-# === 扫描人口数据文件 ===
-pop_files = [f for f in os.listdir(population_folder) if f.endswith(".tif")]
+# ---------- 工具函数 ----------
+def find_files(folder, exts):
+    """递归找所有符合扩展名的文件"""
+    for root, _, files in os.walk(folder):
+        for f in files:
+            if f.lower().endswith(exts):
+                yield os.path.join(root, f)
 
-for pop_file in pop_files:
-    pop_path = os.path.join(population_folder, pop_file)
-    
-    # 输出噪音文件名
-    region_name = pop_file.replace("_clip_3857.tif", "")
-    out_noise_path = os.path.join(output_folder, f"{region_name}_aligned.tif")
-    
-    with rasterio.open(pop_path) as pop_src, rasterio.open(noise_path) as noise_src:
-        pop_meta = pop_src.meta.copy()
-        pop_nodata = pop_src.nodata if pop_src.nodata is not None else -9999
-        noise_nodata = noise_src.nodata if noise_src.nodata is not None else -9999
+def extract_year(path):
+    """从路径提取 4 位年份"""
+    m = re.search(r"20(?:21|22|23)", path)
+    return m.group() if m else None
 
-        # 更新输出元信息
-        pop_meta.update({
-            "dtype": noise_src.dtypes[0],  # 使用噪音数据类型
-            "nodata": noise_nodata
-        })
+# ---------- 主流程 ----------
+# 1. 扫描人口影像（按年份分组）
+pop_dict = {}   # {year: file_path}
+for fp in find_files(POP_ROOT, TIF_EXTS):
+    yr = extract_year(fp)
+    if yr:
+        pop_dict[yr] = fp
 
-        # === 直接重采样噪音影像到人口栅格（完全对齐） ===
-        with rasterio.open(out_noise_path, "w", **pop_meta) as dst:
+# 2. 扫描噪音影像
+noise_files = list(find_files(NOISE_ROOT, TIF_EXTS))
+print(f"发现人口数据年份：{list(pop_dict.keys())}")
+print(f"发现噪音影像数：{len(noise_files)}")
+
+# 3. 逐影像处理
+for nfp in noise_files:
+    yr = extract_year(nfp)
+    if yr not in pop_dict:
+        print(f"⚠  跳过（无对应年份人口）: {nfp}")
+        continue
+    pfp = pop_dict[yr]
+
+    # 输出子目录 & 文件名
+    out_dir = os.path.join(OUT_ROOT, yr)
+    os.makedirs(out_dir, exist_ok=True)
+    base_name = os.path.basename(nfp).split(".")[0] + "_res.tif"
+    out_path  = os.path.join(out_dir, base_name)
+
+    # 4. 对齐重采样
+    with rasterio.open(pfp) as pop_src, rasterio.open(nfp) as noise_src:
+        meta = pop_src.meta.copy()
+        meta.update(dtype=noise_src.dtypes[0],
+                    nodata=noise_src.nodata if noise_src.nodata is not None else -9999)
+         # ===== 新增：先把整块噪音读出来，负值→0 =====
+        noise_arr = noise_src.read(1)          # 整幅二维数组
+        noise_arr = np.where(noise_arr < 0, 0, noise_arr)  # 负值改0
+        # =================================================
+        with rasterio.open(out_path, "w", **meta) as dst:
             reproject(
-                source=rasterio.band(noise_src, 1),      # 原始噪音影像
-                destination=rasterio.band(dst, 1),       # 输出影像
+                source=noise_arr,
+                destination=rasterio.band(dst, 1),
                 src_transform=noise_src.transform,
                 src_crs=noise_src.crs,
-                dst_transform=pop_src.transform,         # 人口影像 transform
-                dst_crs=pop_src.crs,                     # 人口影像 CRS
-                dst_width=pop_src.width,                 # 人口影像宽高
+                dst_transform=pop_src.transform,
+                dst_crs=pop_src.crs,
+                dst_width=pop_src.width,
                 dst_height=pop_src.height,
-                resampling=Resampling.bilinear,          # 或 nearest
-                src_nodata=noise_nodata,
-                dst_nodata=noise_nodata
+                resampling=Resampling.bilinear,
+                src_nodata=noise_src.nodata,
+                dst_nodata=meta["nodata"]
             )
+    print(f"✓ {out_path}")
 
-    print(f"✓ 噪音数据已裁剪并对齐输出: {out_noise_path}")
-
-print("\n🎉 所有噪音数据已完成裁剪与对齐！")
+print("\n🎉 全部对齐完成！")

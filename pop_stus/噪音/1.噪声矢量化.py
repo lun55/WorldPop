@@ -57,17 +57,31 @@ def process_all_noise_tifs(input_folder, output_root, thresholds):
                 
                 # 3. 融合并重投影至 4326
                 # 注意：dissolve 可以极大简化多边形数量，避免后续计算过慢
-                gdf_4326 = gdf_3857.dissolve(by='dB_level').to_crs("EPSG:4326")
-                
+                gdf_4326 = gdf_3857.dissolve(by='dB_level').explode(index_parts=False).reset_index(drop=True)
+                gdf_4326 = gdf_4326.to_crs("EPSG:4326")
                 # 4. 保存为 Shapefile
                 # Shapefile 不支持长字段名，dB_level 会被缩写，但没关系
                 gdf_4326.to_file(output_shp_path, driver='ESRI Shapefile', encoding='utf-8')
-                print(f"  ✅ 已生成: {threshold}dB 矢量文件")
+                print(f"已生成: {threshold}dB 矢量文件")
 
 # === 配置参数 ===
-input_folder = r"F:\机场噪音"
-output_root = r"F:\机场噪音\Vector_Results" # 建议输出到独立文件夹
-noise_thresholds = [40, 45, 50, 55, 60, 65, 70]
+base_input = r"F:\机场噪音\全球噪音_ALL_测试"          # 四个文件夹的父目录
+output_root = r"F:\机场噪音\County_Noise_Masks_New\ALL_40_45"  # 总输出根目录
 
-process_all_noise_tifs(input_folder, output_root, noise_thresholds)
-print("\n🎉 第一步：所有噪音矢量化处理完成！")
+# 四个时段：文件夹名 + 对应阈值
+periods = [
+    ("oneday",    [45, 50, 55]),   # 白天
+    ("night",     [40, 45, 50]),   # 夜间
+    (r"all\oneday", [45, 50, 55]), # 汇总-白天
+    (r"all\night",  [40, 45, 50])  # 汇总-夜间
+]
+
+# === 批量循环 ===
+for folder_name, thresholds in periods:
+    input_folder = os.path.join(base_input, folder_name)
+    os.makedirs(output_root, exist_ok=True)
+
+    print(f"\n>>> 正在处理时段：{folder_name} ，阈值列表：{thresholds}")
+    process_all_noise_tifs(input_folder, output_root, thresholds)
+
+print("\n🎉 全部时段处理完成！")
